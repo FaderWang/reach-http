@@ -1,0 +1,30 @@
+{
+    "run": {
+        "default": "",
+        "items": [
+            {
+                "name": "reach-http",
+                "projectName": "reach-http",
+                "workingDirectory": "/Users/faderw/source/persondir/reach-http",
+                "args": [],
+                "vmargs": [],
+                "env": {},
+                "preLaunchTask": ""
+            }
+        ]
+    },
+    "debug": {
+        "default": "",
+        "items": [
+            {
+                "name": "reach-http",
+                "projectName": "reach-http",
+                "workingDirectory": "/Users/faderw/source/persondir/reach-http",
+                "args": [],
+                "vmargs": [],
+                "env": {},
+                "preLaunchTask": ""
+            }
+        ]
+    }
+}
