@@ -2,13 +2,7 @@ package com.faderw.http;
 
 
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.Proxy;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.net.URLEncoder;
+import java.net.*;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -56,10 +50,12 @@ public class HttpRequest {
 
         ConnectionFactory DEFAULT = new ConnectionFactory() {
 
+            @Override
             public HttpURLConnection create(URL url) throws IOException {
                 return (HttpURLConnection) url.openConnection();
             }
 
+            @Override
             public HttpURLConnection create(URL url, Proxy proxy) throws IOException {
                 return (HttpURLConnection) url.openConnection(proxy);
             }
@@ -67,11 +63,19 @@ public class HttpRequest {
 
     }
 
-    private HttpURLConnection connection = null;
-    private boolean form;
+    private static final int BUFFER_SIZE = 8132;
+    private static final String DEFAULT_CHARSET = "UTF-8";
     private final URL url;
     private final String requestMethod;
-    private static final int BUFFER_SIZE = 8132;
+    private HttpURLConnection connection = null;
+    private boolean form;
+    private boolean multipart;
+    private boolean unprogress;
+    private boolean ignoreCloseException = true;
+
+
+    private String proxyHostName;
+    private Integer proxyHostPort;
 
     private RequestOutputStream outputStream;
 
@@ -81,11 +85,23 @@ public class HttpRequest {
     private HttpURLConnection createConnection() {
         final HttpURLConnection connection;
         try {
-            connection = connectionFactory.create(url);
+            if (proxyHostName != null && proxyHostPort != null) {
+                connection = connectionFactory.create(url, new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxyHostName, proxyHostPort)));
+            } else {
+                connection = connectionFactory.create(url);
+            }
             connection.setRequestMethod(requestMethod);
             return connection;
         } catch (IOException e) {
             throw new HttpRequestException(e);
+        }
+    }
+
+    private String getValidCharset(final String charset) {
+        if (charset != null && charset.length() > 0) {
+            return charset;
+        } else {
+            return DEFAULT_CHARSET;
         }
     }
 
@@ -96,13 +112,23 @@ public class HttpRequest {
         return connection;
     }
 
+    public HttpRequest userProxy(String proxyHostName, Integer proxyHostPort) {
+        this.proxyHostName = proxyHostName;
+        this.proxyHostPort = proxyHostPort;
+        return this;
+    }
+
     public HttpRequest openOutput() {
         if (outputStream != null) {
             return this;
         }
         getConnection().setDoOutput(true);
         final String charset = getParam(getConnection().getRequestProperty(HEADER_CONTENT_TYPE), PARAM_CHARSET);
-        outputStream = new RequestOutputStream(getConnection().getOutputStream(), null, BUFFER_SIZE);
+        try {
+            outputStream = new RequestOutputStream(getConnection().getOutputStream(), charset, BUFFER_SIZE);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
         return this;
     }
 
@@ -122,32 +148,8 @@ public class HttpRequest {
         return new HttpRequest(url, METHOD_POST);
     }
 
-    public HttpRequest form(final Object key, final Object value, final String charset) {
-        boolean first = !form;
-        if (first) {
-            contentType(CONTENT_TYPE_FORM, charset);
-            form = true;
-        }
-        
-        try {
-            openOutput();
-            if (!first) {
-                outputStream.write('&');
-            }
-            outputStream.write(URLEncoder.encode(value.toString(), charset));
-            outputStream.write("=");
-            if (value != null) {
-                outputStream.write(URLEncoder.encode(value.toString(), charset));
-            }
-            
-        } catch (IOException e) {
-            throw new HttpRequestException(e);
-        }
-        return this;
-    }
-
     public static HttpRequest post(final CharSequence baseUrl,final Map<?, ?> params, final boolean encode) {
-        String url = append(url, params);
+        String url = append(baseUrl, params);
         return post(encode ? encode(url) : url);
     }
 
@@ -178,6 +180,115 @@ public class HttpRequest {
             io.initCause(e);
             throw new HttpRequestException(io);
 		}
+    }
+
+    public HttpRequest form(Map<?, ?> params) {
+        return form(params, DEFAULT_CHARSET);
+    }
+
+    public HttpRequest json(final String json) {
+        contentType(CONTENT_TYPE_JSON, DEFAULT_CHARSET);
+        send(json);
+        return this;
+    }
+
+    public HttpRequest send(final CharSequence charSequence) {
+        openOutput();
+        try {
+            outputStream.write(charSequence.toString());
+        } catch (IOException e) {
+            throw new HttpRequestException(e);
+        }
+        return this;
+    }
+
+    public HttpRequest part(final String name, final String part) {
+        return part(name, null, null, part);
+    }
+
+    public HttpRequest part(final String name, final String filename, File file) {
+        return this;
+    }
+
+    public HttpRequest part(final String name, final String filename, final String part) {
+        return part(name, filename, null, part);
+    }
+
+    public HttpRequest part(final String name, final String filename, final String contentType, final String part) {
+        try {
+            startPart();
+            writePartHeader(name, filename, contentType);
+            outputStream.write(part);
+        } catch (IOException e) {
+            throw new HttpRequestException(e);
+        }
+        return this;
+    }
+
+
+    protected HttpRequest startPart() throws IOException {
+        if (!multipart) {
+            contentType(CONTENT_TYPE_MUITIPART + BOUNDARY, null);
+            openOutput();
+            outputStream.write("--" + BOUNDARY + CRLF);
+        } else {
+            outputStream.write("--"+ BOUNDARY + CRLF);
+        }
+        return this;
+    }
+
+    protected HttpRequest writePartHeader(final String name, final String filename, final String contentType) {
+        final StringBuilder partBuilder = new StringBuilder();
+        partBuilder.append("form-data;name=\"").append(name).append("\"");
+        if (filename != null) {
+            partBuilder.append(";filename=\"").append(filename).append("\"");
+        }
+        partHeader("Content-Disposition", partBuilder.toString());
+        if (contentType != null) {
+            partHeader(HEADER_CONTENT_TYPE, contentType);
+        }
+        return send(CRLF);
+    }
+
+    protected HttpRequest partHeader(final String header, final String value) {
+        return send(header).send(":").send(value).send(CRLF);
+    }
+
+
+
+    public HttpRequest form(Map<?, ?> params, String charset) {
+        if (params == null || params.isEmpty()) {
+            return this;
+        }
+        charset = getValidCharset(charset);
+        for (Entry<?, ?> entry : params.entrySet()) {
+            form(entry.getKey(), entry.getValue(), charset);
+        }
+        return this;
+    }
+
+    public HttpRequest form(final Object key, final Object value, final String charset) {
+        boolean first = !form;
+        if (first) {
+            contentType(CONTENT_TYPE_FORM, charset);
+            form = true;
+        }
+
+        try {
+            openOutput();
+            if (!first) {
+                outputStream.write('&');
+            }
+            outputStream.write(URLEncoder.encode(value.toString(), charset));
+            outputStream.write("=");
+            if (value != null) {
+                outputStream.write(URLEncoder.encode(value.toString(), charset));
+            }
+
+        } catch (IOException e) {
+            throw new HttpRequestException(e);
+        }
+        return this;
     }
 
     public static String append(final CharSequence url, Map<?, ?> params) {
@@ -252,37 +363,55 @@ public class HttpRequest {
     }
 
     private static List<Object> arrayToList(final Object array) {
-        if (array instanceof Object[])
-          return Arrays.asList((Object[]) array);
-    
-        List<Object> result = new ArrayList<Object>();
+        if (array instanceof Object[]) {
+            return Arrays.asList((Object[]) array);
+
+        }
+        List<Object> result = new ArrayList<>();
         // Arrays of the primitive types can't be cast to array of Object, so this:
-        if (array instanceof int[])
-          for (int value : (int[]) array) result.add(value);
-        else if (array instanceof boolean[])
-          for (boolean value : (boolean[]) array) result.add(value);
-        else if (array instanceof long[])
-          for (long value : (long[]) array) result.add(value);
-        else if (array instanceof float[])
-          for (float value : (float[]) array) result.add(value);
-        else if (array instanceof double[])
-          for (double value : (double[]) array) result.add(value);
-        else if (array instanceof short[])
-          for (short value : (short[]) array) result.add(value);
-        else if (array instanceof byte[])
-          for (byte value : (byte[]) array) result.add(value);
-        else if (array instanceof char[])
-          for (char value : (char[]) array) result.add(value);
+        if (array instanceof int[]) {
+            for (int value : (int[]) array) {
+                result.add(value);
+            }
+        } else if (array instanceof boolean[]) {
+            for (boolean value : (boolean[]) array) {
+                result.add(value);
+            }
+        } else if (array instanceof long[]) {
+            for (long value : (long[]) array) {
+                result.add(value);
+            }
+        } else if (array instanceof float[]) {
+            for (float value : (float[]) array) {
+                result.add(value);
+            }
+        } else if (array instanceof double[]) {
+            for (double value : (double[]) array) {
+                result.add(value);
+            }
+        } else if (array instanceof short[]) {
+            for (short value : (short[]) array) {
+                result.add(value);
+            }
+        } else if (array instanceof byte[]) {
+            for (byte value : (byte[]) array) {
+                result.add(value);
+            }
+        } else if (array instanceof char[]) {
+            for (char value : (char[]) array) {
+                result.add(value);
+            }
+        }
+
         return result;
+    }
 
     public String body(String charset) {
         final ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         copy(buffer(), outputStream);
 
         try {
-            if (charset == null || charset.length() == 0) {
-                charset = "UTF-8";
-            }
+            charset = getValidCharset(charset);
             return outputStream.toString(charset);
         } catch (UnsupportedEncodingException e) {
             throw new HttpRequestException(e);
@@ -326,11 +455,13 @@ public class HttpRequest {
 
     public int intHeader(final String name, final int defaultValue) {
         //todo closeOutput
+        closeOutputQuietly();
         return getConnection().getHeaderFieldInt(name, defaultValue);
     }
 
     public HttpRequest header(final String headerName, final String value) {
         getConnection().setRequestProperty(headerName, value);
+        return this;
     }
     /**
      * Get header 'Content-Length' from the response
@@ -342,45 +473,91 @@ public class HttpRequest {
 
     public HttpRequest contentType(final String contentType, final String charset) {
         if (charset != null && charset.length() == 0) {
-            String separtaor = ";" + PARAM_CHARSET + "=";
-            return header(HEADER_CONTENT_TYPE, contentType + separtaor + charset)
+            String separator = ";" + PARAM_CHARSET + "=";
+            return header(HEADER_CONTENT_TYPE, contentType + separator + charset);
         }
         return header(HEADER_CONTENT_TYPE, contentType);
     }
 
 
+    protected ByteArrayOutputStream byteStream() {
+        final int size = contentLength();
+        if (size > 0) {
+            return new ByteArrayOutputStream(size);
+        } else {
+            return new ByteArrayOutputStream();
+        }
+    }
+
+    protected HttpRequest closeOutputQuietly() {
+        try {
+            closeOutput();
+        } catch (IOException e) {
+            throw new HttpRequestException(e);
+        }
+        return this;
+    }
+
+    protected HttpRequest closeOutput() throws IOException {
+        //todo progress upload
+        if (outputStream == null) {
+            return this;
+        }
+        if (multipart) {
+            outputStream.write(CRLF + "--" + BOUNDARY + "--" + CRLF);
+        }
+        if (ignoreCloseException) {
+            try {
+                outputStream.close();
+            } catch (Exception e) {
+
+            }
+        } else {
+            outputStream.close();
+        }
+        return this;
+    }
 
     protected String getParam(final String value, final String paramName) {
-        if (value == null || value.length() == 0)
-          return null;
-    
+        if (value == null || value.length() == 0) {
+            return null;
+        }
+
         final int length = value.length();
         int start = value.indexOf(';') + 1;
-        if (start == 0 || start == length)
-          return null;
-    
+        if (start == 0 || start == length) {
+            return null;
+        }
         int end = value.indexOf(';', start);
-        if (end == -1)
-          end = length;
-    
-        while (start < end) {
-          int nameEnd = value.indexOf('=', start);
-          if (nameEnd != -1 && nameEnd < end
-              && paramName.equals(value.substring(start, nameEnd).trim())) {
-            String paramValue = value.substring(nameEnd + 1, end).trim();
-            int valueLength = paramValue.length();
-            if (valueLength != 0)
-              if (valueLength > 2 && '"' == paramValue.charAt(0)
-                  && '"' == paramValue.charAt(valueLength - 1))
-                return paramValue.substring(1, valueLength - 1);
-              else
-                return paramValue;
-          }
-    
-          start = end + 1;
-          end = value.indexOf(';', start);
-          if (end == -1)
+        if (end == -1) {
             end = length;
         }
+
+        while (start < end) {
+            int nameEnd = value.indexOf('=', start);
+            if (nameEnd != -1 && nameEnd < end
+                    && paramName.equals(value.substring(start, nameEnd).trim())) {
+                String paramValue = value.substring(nameEnd + 1, end).trim();
+                int valueLength = paramValue.length();
+                if (valueLength != 0) {
+                    if (valueLength > 2 && '"' == paramValue.charAt(0)
+                            && '"' == paramValue.charAt(valueLength - 1)) {
+                        return paramValue.substring(1, valueLength - 1);
+                    } else {
+                        return paramValue;
+                    }
+                }
+
+            }
+
+            start = end + 1;
+            end = value.indexOf(';', start);
+            if (end == -1) {
+                end = length;
+            }
+        }
+
+        return null;
+    }
 
 }

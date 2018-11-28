@@ -32,9 +32,34 @@ public interface HttpRequestConst {
      */
     String PARAM_CHARSET = "charset";
 
-     /**
-   * 'application/x-www-form-urlencoded' content type header value
-   */
+    /**
+     * 'application/x-www-form-urlencoded' content type header value
+    */
     String CONTENT_TYPE_FORM = "application/x-www-form-urlencoded";
+
+    /**
+     * 'application/json' content type header value
+     */
+    String CONTENT_TYPE_JSON = "application/json";
+
+    /**
+     * 'application/json;charset=UTF-8' content type header value
+     */
+    String CONTENT_TYPE_JSON_UTF8 = "application/json;charset=UTF-8";
+
+    /**
+     * 'multipart/form-data' content type header value
+     */
+    String CONTENT_TYPE_MUITIPART = "multipart/form-data;boundary=";
+
+    /**
+     * 'CRLF' text
+     */
+    String CRLF = "\r\n";
+
+    /**
+     * 'boundary' text
+     */
+    String BOUNDARY = "reach0boundary0content";
 
 }
