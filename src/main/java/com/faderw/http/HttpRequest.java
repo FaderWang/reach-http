@@ -214,6 +214,17 @@ public class HttpRequest {
         return part(name, filename, null, part);
     }
 
+    public HttpRequest part(final String name, final String filename, final InputStream inputStream) {
+        try {
+            BufferedInputStream in = new BufferedInputStream(inputStream);
+            startPart();
+            writePartHeader(name, filename, null);
+            copy(in, outputStream);
+        } catch (IOException e) {
+            throw new HttpRequestException(e);
+        }
+    }
+
     public HttpRequest part(final String name, final String filename, final String contentType, final String part) {
         try {
             startPart();
